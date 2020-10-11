@@ -48,35 +48,49 @@ impl<T> NewDedup<T> for Vec<T> {
         if self.len() == 0 {
             return;
         }
-        let mut guard = Guard {
-            last_unique: self.as_mut_ptr(),
-            i: unsafe { self.as_mut_ptr().add(1) },
-            end: unsafe { self.as_mut_ptr().add(self.len()) },
-            vec: self,
-        };
-        while guard.i < guard.end {
-            if same_bucket(unsafe { &mut *guard.i }, unsafe { &mut *guard.last_unique }) {
-                let dupe = guard.i;
-                guard.i = unsafe { guard.i.add(1) };
-                unsafe {
-                    ptr::drop_in_place(dupe);
-                }
-            } else {
-                guard.last_unique = unsafe { guard.last_unique.add(1) };
-                if guard.last_unique < guard.i {
+        let mut i = unsafe { self.as_mut_ptr().add(1) };
+        let end = unsafe { self.as_mut_ptr().add(self.len()) };
+        while i < end {
+            let last = unsafe { i.sub(1) };
+            if same_bucket(unsafe { &mut *i }, unsafe { &mut *last }) {
+                let mut guard = Guard {
+                    last_unique: last,
+                    i,
+                    end,
+                    vec: self,
+                };
+                loop {
+                    let dupe = guard.i;
+                    guard.i = unsafe { guard.i.add(1) };
                     unsafe {
-                        ptr::copy_nonoverlapping(guard.i, guard.last_unique, 1);
+                        ptr::drop_in_place(dupe);
+                    }
+                    loop {
+                        if guard.i >= end {
+                            unsafe {
+                                guard.vec.set_len(
+                                    (guard.last_unique.add(1) as usize
+                                        - guard.vec.as_ptr() as usize)
+                                        / core::mem::size_of::<T>(),
+                                );
+                            }
+                            core::mem::forget(guard);
+                            return;
+                        }
+                        if same_bucket(unsafe { &mut *guard.i }, unsafe { &mut *guard.last_unique })
+                        {
+                            break;
+                        } else {
+                            guard.last_unique = unsafe { guard.last_unique.add(1) };
+                            unsafe {
+                                ptr::copy_nonoverlapping(guard.i, guard.last_unique, 1);
+                            }
+                            guard.i = unsafe { guard.i.add(1) };
+                        }
                     }
                 }
-                guard.i = unsafe { guard.i.add(1) };
             }
+            i = unsafe { i.add(1) };
         }
-        unsafe {
-            guard.vec.set_len(
-                (guard.last_unique.add(1) as usize - guard.vec.as_ptr() as usize)
-                    / core::mem::size_of::<T>(),
-            );
-        }
-        core::mem::forget(guard);
     }
 }
